@@ -1,193 +1,103 @@
 package chardet
 
-// [\x00-\x7F]
-// [\xC0-\xDF][\x80-\xBF]
-// [\xE0-\xEF][\x80-\xBF]{2}
-// [\xF0-\xF7][\x80-\xBF]{3}
-type utf8 struct {
-	byte
+import (
+	"bytes"
+)
+
+var (
+	utf16beBom = []byte{0xFE, 0xFF}
+	utf16leBom = []byte{0xFF, 0xFE}
+	utf32beBom = []byte{0x00, 0x00, 0xFE, 0xFF}
+	utf32leBom = []byte{0xFF, 0xFE, 0x00, 0x00}
+)
+
+type recognizerUtf16be struct {
 }
 
-func (u utf8) String() string {
-	return "utf-8"
+func newRecognizer_utf16be() *recognizerUtf16be {
+	return &recognizerUtf16be{}
 }
 
-func (u *utf8) Feed(x byte) bool {
-	if u.byte == 0 {
-		if x >= 0x00 && x <= 0x7F {
-			return true
-		}
-		if x >= 0xC0 && x <= 0xDF {
-			u.byte = 1
-			return true
-		}
-		if x >= 0xE0 && x <= 0xEF {
-			u.byte = 2
-			return true
-		}
-		if x >= 0xF0 && x <= 0xF7 {
-			u.byte = 3
-			return true
-		}
-	} else {
-		if x >= 0x80 && x <= 0xBF {
-			u.byte -= 1
-			return true
+func (*recognizerUtf16be) Match(input *recognizerInput) (output recognizerOutput) {
+	output = recognizerOutput{
+		Charset: "UTF-16BE",
+	}
+	if bytes.HasPrefix(input.raw, utf16beBom) {
+		output.Confidence = 100
+	}
+	return
+}
+
+type recognizerUtf16le struct {
+}
+
+func newRecognizer_utf16le() *recognizerUtf16le {
+	return &recognizerUtf16le{}
+}
+
+func (*recognizerUtf16le) Match(input *recognizerInput) (output recognizerOutput) {
+	output = recognizerOutput{
+		Charset: "UTF-16LE",
+	}
+	if bytes.HasPrefix(input.raw, utf16leBom) && !bytes.HasPrefix(input.raw, utf32leBom) {
+		output.Confidence = 100
+	}
+	return
+}
+
+type recognizerUtf32 struct {
+	name       string
+	bom        []byte
+	decodeChar func(input []byte) uint32
+}
+
+func decodeUtf32be(input []byte) uint32 {
+	return uint32(input[0])<<24 | uint32(input[1])<<16 | uint32(input[2])<<8 | uint32(input[3])
+}
+
+func decodeUtf32le(input []byte) uint32 {
+	return uint32(input[3])<<24 | uint32(input[2])<<16 | uint32(input[1])<<8 | uint32(input[0])
+}
+
+func newRecognizer_utf32be() *recognizerUtf32 {
+	return &recognizerUtf32{
+		"UTF-32BE",
+		utf32beBom,
+		decodeUtf32be,
+	}
+}
+
+func newRecognizer_utf32le() *recognizerUtf32 {
+	return &recognizerUtf32{
+		"UTF-32LE",
+		utf32leBom,
+		decodeUtf32le,
+	}
+}
+
+func (r *recognizerUtf32) Match(input *recognizerInput) (output recognizerOutput) {
+	output = recognizerOutput{
+		Charset: r.name,
+	}
+	hasBom := bytes.HasPrefix(input.raw, r.bom)
+	var numValid, numInvalid uint32
+	for b := input.raw; len(b) >= 4; b = b[4:] {
+		if c := r.decodeChar(b); c >= 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF) {
+			numInvalid++
+		} else {
+			numValid++
 		}
 	}
-	return false
-}
-
-func (u utf8) Priority() float64 {
-	return 0
-}
-
-// [\x00-\xD7\xE0-\xFF][\x00-\xFF]
-// [\xD8-\xDB][\x00-\xFF][\xDC-\DF][\x00-\xFF]
-type utf16BE struct {
-	byte
-}
-
-func (u utf16BE) String() string {
-	return "utf-16be"
-}
-
-func (u *utf16BE) Feed(x byte) bool {
-	switch u.byte {
-	case 0:
-		if (x >= 0x00 && x <= 0xD7) || (x >= 0xE0 && x <= 0xFF) {
-			u.byte = 1
-			return true
-		}
-		if x >= 0xD8 && x <= 0xDB {
-			u.byte = 2
-			return true
-		}
-	case 1:
-		u.byte = 0
-		return true
-	case 2:
-		u.byte = 3
-		return true
-	default:
-		if x >= 0xDC && x <= 0xDF {
-			u.byte = 1
-			return true
-		}
+	if hasBom && numInvalid == 0 {
+		output.Confidence = 100
+	} else if hasBom && numValid > numInvalid*10 {
+		output.Confidence = 80
+	} else if numValid > 3 && numInvalid == 0 {
+		output.Confidence = 100
+	} else if numValid > 0 && numInvalid == 0 {
+		output.Confidence = 80
+	} else if numValid > numInvalid*10 {
+		output.Confidence = 25
 	}
-	return false
-}
-
-func (u utf16BE) Priority() float64 {
-	return 0
-}
-
-// [\x00-\xFF][\x00-\xD7\xE0-\xFF]
-// [\x00-\xFF][\xD8-\xDB][\x00-\xFF][\xDC-\DF]
-type utf16LE struct {
-	byte
-}
-
-func (u utf16LE) String() string {
-	return "utf-16le"
-}
-
-func (u *utf16LE) Feed(x byte) bool {
-	switch u.byte {
-	case 0:
-		u.byte = 1
-		return true
-	case 1:
-		if (x >= 0x00 && x <= 0xD7) || (x >= 0xE0 && x <= 0xFF) {
-			u.byte = 0
-			return true
-		}
-		if x >= 0xD8 && x <= 0xDB {
-			u.byte = 2
-			return true
-		}
-	case 2:
-		u.byte = 3
-		return true
-	default:
-		if x >= 0xDC && x <= 0xDF {
-			u.byte = 0
-			return true
-		}
-	}
-	return false
-}
-
-func (u utf16LE) Priority() float64 {
-	return 0
-}
-
-// \x00[\x00-\x0F][\x00-\xFF]{2}
-type utf32BE struct {
-	byte
-}
-
-func (u utf32BE) String() string {
-	return "utf-32be"
-}
-
-func (u *utf32BE) Feed(x byte) bool {
-	switch u.byte {
-	case 0:
-		if x == 0x00 {
-			u.byte = 1
-			return true
-		}
-	case 1:
-		if x >= 0x00 && x <= 0x1F {
-			u.byte = 2
-			return true
-		}
-	case 2:
-		u.byte = 3
-		return true
-	default:
-		u.byte = 0
-		return true
-	}
-	return false
-}
-
-func (u utf32BE) Priority() float64 {
-	return 0
-}
-
-// [\x00-\xFF]{2}[\x00-\x0F]\x00
-type utf32LE struct {
-	byte
-}
-
-func (u utf32LE) String() string {
-	return "utf-32le"
-}
-
-func (u *utf32LE) Feed(x byte) bool {
-	switch u.byte {
-	case 0:
-		u.byte = 1
-		return true
-	case 1:
-		u.byte = 2
-		return true
-	case 2:
-		if x >= 0x00 && x <= 0x1F {
-			u.byte = 3
-			return true
-		}
-	default:
-		if x == 0x00 {
-			u.byte = 0
-			return true
-		}
-	}
-	return false
-}
-
-func (u utf32LE) Priority() float64 {
-	return 0
+	return
 }
