@@ -3,7 +3,7 @@ package chardet
 import (
 	"bytes"
 	"errors"
-	"ggithub.com/golang/text/encoding"
+	"github.com/golang/text/encoding"
 	"github.com/golang/text/encoding/japanese"
 	"github.com/golang/text/encoding/korean"
 	"github.com/golang/text/encoding/simplifiedchinese"
